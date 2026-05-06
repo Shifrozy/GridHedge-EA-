@@ -1,0 +1,30 @@
+---
+description: MQL5 Grid Hedging EA development rules and conventions
+globs: "**/*.mq5, **/*.mqh"
+alwaysApply: false
+---
+
+# MQL5 Grid Hedging EA Rules
+
+## Code Style
+- Use descriptive variable names with Hungarian notation where appropriate
+- Group inputs using `//--- Section Name ---//` comments
+- Use enums for trade directions and cycle states
+- Keep functions under 100 lines where possible
+
+## Trading Logic
+- Always validate spread before opening trades
+- Check margin availability before sending orders
+- Use magic numbers to identify EA trades
+- Normalize lot sizes to broker specifications
+- Handle partial fills and requotes gracefully
+
+## Error Handling
+- Log all trade operations with Print/PrintFormat
+- Retry failed operations with appropriate delays
+- Check GetLastError() after every trade operation
+
+## File Structure
+- Main EA file: GridHedge_EA.mq5
+- All code in single file for easy distribution
+- Well-commented sections for each logical component
