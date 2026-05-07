@@ -100,7 +100,15 @@ int OnInit()
 
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippage);
-   trade.SetTypeFilling(ORDER_FILLING_FOK);
+
+   //--- Auto-detect filling mode (FOK may not work on all brokers)
+   long fillType = SymbolInfoInteger(g_symbol, SYMBOL_FILLING_MODE);
+   if((fillType & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK)
+      trade.SetTypeFilling(ORDER_FILLING_FOK);
+   else if((fillType & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC)
+      trade.SetTypeFilling(ORDER_FILLING_IOC);
+   else
+      trade.SetTypeFilling(ORDER_FILLING_RETURN);
 
    // Init cycle
    g_currentLot       = NormalizeLot(InpStartLot);
@@ -259,69 +267,56 @@ void ManageGrid()
   {
    if(IsRestrictedTime()) return; // Don't add new trades during restricted hours
 
+   // Check if both sides maxed out - nothing more to do
+   if(g_buyCount >= InpMaxGridTrades && g_sellCount >= InpMaxGridTrades)
+      return;
+
    double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
    double gridDist = InpGridPips * g_point;
 
-   // --- Add BUY trades (price moving up from last buy)
-   if(g_lastBuyPrice > 0 && g_buyCount < InpMaxGridTrades)
+   // --- Add BUY trades (same direction or hedge)
+   if(g_buyCount < InpMaxGridTrades)
      {
-      if(ask >= g_lastBuyPrice + gridDist)
+      double buyRef;
+      if(g_lastBuyPrice > 0)
+         buyRef = g_lastBuyPrice;
+      else
+         buyRef = g_triggerPrice; // First hedge buy: use trigger as reference
+
+      if(buyRef > 0 && ask >= buyRef + gridDist)
         {
+         string label = (g_sellCount > 0 && g_buyCount == 0) ? "hedge" : "grid";
          if(trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
-                       StringFormat("GridHedge Buy #%d", g_buyCount+1)))
+                       StringFormat("GridHedge Buy (%s) #%d", label, g_buyCount+1)))
            {
             g_lastBuyPrice = ask;
             g_buyCount++;
-            PrintFormat("[GridHedge] Grid BUY #%d @ %.5f", g_buyCount, ask);
+            PrintFormat("[GridHedge] BUY (%s) #%d @ %.5f", label, g_buyCount, ask);
            }
         }
      }
 
-   // --- Add SELL hedge trades (price moving down from trigger or last sell)
-   if(g_triggerPrice > 0)
+   // --- Add SELL trades (same direction or hedge)
+   if(g_sellCount < InpMaxGridTrades)
      {
-      double sellRef = (g_lastSellPrice > 0) ? g_lastSellPrice : g_triggerPrice;
+      double sellRef;
+      if(g_lastSellPrice > 0)
+         sellRef = g_lastSellPrice;
+      else
+         sellRef = g_triggerPrice; // First hedge sell: use trigger as reference
 
-      if(g_sellCount < InpMaxGridTrades && bid <= sellRef - gridDist)
+      if(sellRef > 0 && bid <= sellRef - gridDist)
         {
+         string label = (g_buyCount > 0 && g_sellCount == 0) ? "hedge" : "grid";
          if(trade.Sell(g_currentLot, g_symbol, bid, 0, 0,
-                        StringFormat("GridHedge Sell #%d", g_sellCount+1)))
+                        StringFormat("GridHedge Sell (%s) #%d", label, g_sellCount+1)))
            {
             g_lastSellPrice = bid;
             g_sellCount++;
-            PrintFormat("[GridHedge] Grid SELL (hedge) #%d @ %.5f", g_sellCount, bid);
+            PrintFormat("[GridHedge] SELL (%s) #%d @ %.5f", label, g_sellCount, bid);
            }
         }
-     }
-
-   // --- If started with SELL, add sells going down and buy hedges going up
-   if(g_sellCount > 0 && g_buyCount == 0 && g_lastSellPrice > 0)
-     {
-      // Add more sells in direction
-      if(g_sellCount < InpMaxGridTrades && bid <= g_lastSellPrice - gridDist)
-        {
-         // Already handled above
-        }
-      // Add buy hedge going up
-      double buyRef = (g_lastBuyPrice > 0) ? g_lastBuyPrice : g_triggerPrice;
-      if(g_buyCount < InpMaxGridTrades && ask >= buyRef + gridDist)
-        {
-         if(trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
-                       StringFormat("GridHedge Buy (hedge) #%d", g_buyCount+1)))
-           {
-            g_lastBuyPrice = ask;
-            g_buyCount++;
-            PrintFormat("[GridHedge] Grid BUY (hedge) #%d @ %.5f", g_buyCount, ask);
-           }
-        }
-     }
-
-   // --- Check if cycle is "failed" (max trades reached without TP)
-   if(g_buyCount >= InpMaxGridTrades && g_sellCount >= InpMaxGridTrades)
-     {
-      // Both sides maxed out - wait for TP or SL, no more grid expansion
-      return;
      }
   }
 
