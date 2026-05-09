@@ -75,12 +75,13 @@ double         g_lotMax;
 // --- Cycle State ---
 double         g_currentLot;          // Current lot size for this cycle
 double         g_triggerPrice;         // Price where cycle started
-int            g_buyCount;            // Buys opened in current cycle
-int            g_sellCount;           // Sells opened in current cycle
+int            g_buyCount;            // Buys opened at current lot level
+int            g_sellCount;           // Sells opened at current lot level
 double         g_lastBuyPrice;        // Last buy entry price
 double         g_lastSellPrice;       // Last sell entry price
 bool           g_cycleActive;         // Is a trading cycle active?
 bool           g_cycleFailed;         // Has this cycle been marked as failed?
+int            g_initialDirection;    // 1=BUY started, -1=SELL started
 int            g_failedCycles;        // Count of consecutive failed cycles
 bool           g_initialTradeOpened;  // First trade of cycle placed?
 datetime       g_lastBarTime;         // For new bar detection
@@ -120,6 +121,7 @@ int OnInit()
    g_lastSellPrice     = 0;
    g_cycleActive       = false;
    g_cycleFailed       = false;
+   g_initialDirection  = 0;
    g_failedCycles      = 0;
    g_initialTradeOpened= false;
    g_lastBarTime       = 0;
@@ -183,10 +185,47 @@ void OnTick()
       // Price returned within 1 grid distance of trigger
       if(MathAbs(mid - g_triggerPrice) <= gridDist)
         {
-         PrintFormat("[GridHedge] Price returned to trigger area (%.5f ~ %.5f). Closing failed cycle.",
-                     mid, g_triggerPrice);
-         CloseAllPositions();
-         ResetCycle(true); // failed → increase lot
+         // Increase lot size
+         g_failedCycles++;
+         g_currentLot = NormalizeLot(InpStartLot + g_failedCycles * InpLotIncrement);
+
+         PrintFormat("[GridHedge] Price returned to trigger %.5f! Lot increased to %.2f (fail #%d)",
+                     g_triggerPrice, g_currentLot, g_failedCycles);
+
+         // Open new trade at trigger point in original direction
+         bool opened = false;
+         if(g_initialDirection == 1) // was BUY
+           {
+            opened = trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
+                               StringFormat("GridHedge Buy (new lot) %.2f", g_currentLot));
+            if(opened)
+              {
+               // Reset ALL price references to new trigger point
+               g_lastBuyPrice  = ask;
+               g_lastSellPrice = 0;   // Clear old sell reference
+               g_triggerPrice  = ask;
+               PrintFormat("[GridHedge] New BUY @ %.5f | Lot=%.2f", ask, g_currentLot);
+              }
+           }
+         else // was SELL
+           {
+            opened = trade.Sell(g_currentLot, g_symbol, bid, 0, 0,
+                                StringFormat("GridHedge Sell (new lot) %.2f", g_currentLot));
+            if(opened)
+              {
+               // Reset ALL price references to new trigger point
+               g_lastSellPrice = bid;
+               g_lastBuyPrice  = 0;   // Clear old buy reference
+               g_triggerPrice  = bid;
+               PrintFormat("[GridHedge] New SELL @ %.5f | Lot=%.2f", bid, g_currentLot);
+              }
+           }
+
+         // Reset counters for new lot level
+         g_buyCount  = (g_initialDirection == 1)  ? 1 : 0;
+         g_sellCount = (g_initialDirection == -1) ? 1 : 0;
+         g_cycleFailed = false;
+
          if(InpShowPanel) UpdatePanel();
          return;
         }
@@ -259,6 +298,7 @@ void TryStartCycle()
          g_lastBuyPrice = ask;
          g_buyCount = 1;
          g_triggerPrice = ask;
+         g_initialDirection = 1;
          PrintFormat("[GridHedge] Cycle START BUY @ %.5f | Lot=%.2f", ask, g_currentLot);
         }
      }
@@ -270,6 +310,7 @@ void TryStartCycle()
          g_lastSellPrice = bid;
          g_sellCount = 1;
          g_triggerPrice = bid;
+         g_initialDirection = -1;
          PrintFormat("[GridHedge] Cycle START SELL @ %.5f | Lot=%.2f", bid, g_currentLot);
         }
      }
@@ -285,50 +326,60 @@ void TryStartCycle()
   }
 
 //+------------------------------------------------------------------+
-//| Grid Management - add positions at grid intervals (NO LIMIT)     |
+//| Grid Management - add positions at grid intervals                |
 //+------------------------------------------------------------------+
 void ManageGrid()
   {
    if(IsRestrictedTime()) return;
 
+   // STOP adding trades once cycle is marked failed
+   // Wait for price to return to trigger area (handled in OnTick)
+   if(g_cycleFailed) return;
+
    double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
    double gridDist = InpGridPips * g_point;
 
-   // --- Add BUY trades (unlimited - no cap)
-   double buyRef = (g_lastBuyPrice > 0) ? g_lastBuyPrice : g_triggerPrice;
-   if(buyRef > 0 && ask >= buyRef + gridDist)
+   // --- Add BUY trades (capped at max grid trades per side)
+   if(g_buyCount < InpMaxGridTrades)
      {
-      string label = (g_sellCount > 0 && g_buyCount == 0) ? "hedge" : "grid";
-      if(trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
-                    StringFormat("GridHedge Buy (%s) #%d", label, g_buyCount+1)))
+      double buyRef = (g_lastBuyPrice > 0) ? g_lastBuyPrice : g_triggerPrice;
+      if(buyRef > 0 && ask >= buyRef + gridDist)
         {
-         g_lastBuyPrice = ask;
-         g_buyCount++;
-         PrintFormat("[GridHedge] BUY (%s) #%d @ %.5f | Lot=%.2f", label, g_buyCount, ask, g_currentLot);
+         string label = (g_sellCount > 0 && g_buyCount == 0) ? "hedge" : "grid";
+         if(trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
+                       StringFormat("GridHedge Buy (%s) #%d L=%.2f", label, g_buyCount+1, g_currentLot)))
+           {
+            g_lastBuyPrice = ask;
+            g_buyCount++;
+            PrintFormat("[GridHedge] BUY (%s) #%d @ %.5f | Lot=%.2f", label, g_buyCount, ask, g_currentLot);
+           }
         }
      }
 
-   // --- Add SELL trades (unlimited - no cap)
-   double sellRef = (g_lastSellPrice > 0) ? g_lastSellPrice : g_triggerPrice;
-   if(sellRef > 0 && bid <= sellRef - gridDist)
+   // --- Add SELL trades (capped at max grid trades per side)
+   if(g_sellCount < InpMaxGridTrades)
      {
-      string label = (g_buyCount > 0 && g_sellCount == 0) ? "hedge" : "grid";
-      if(trade.Sell(g_currentLot, g_symbol, bid, 0, 0,
-                     StringFormat("GridHedge Sell (%s) #%d", label, g_sellCount+1)))
+      double sellRef = (g_lastSellPrice > 0) ? g_lastSellPrice : g_triggerPrice;
+      if(sellRef > 0 && bid <= sellRef - gridDist)
         {
-         g_lastSellPrice = bid;
-         g_sellCount++;
-         PrintFormat("[GridHedge] SELL (%s) #%d @ %.5f | Lot=%.2f", label, g_sellCount, bid, g_currentLot);
+         string label = (g_buyCount > 0 && g_sellCount == 0) ? "hedge" : "grid";
+         if(trade.Sell(g_currentLot, g_symbol, bid, 0, 0,
+                        StringFormat("GridHedge Sell (%s) #%d L=%.2f", label, g_sellCount+1, g_currentLot)))
+           {
+            g_lastSellPrice = bid;
+            g_sellCount++;
+            PrintFormat("[GridHedge] SELL (%s) #%d @ %.5f | Lot=%.2f", label, g_sellCount, bid, g_currentLot);
+           }
         }
      }
 
-   // --- Mark cycle as failed if either side exceeds threshold
+   // --- Mark cycle as failed when either side hits max grid trades
    if(!g_cycleFailed && (g_buyCount >= InpMaxGridTrades || g_sellCount >= InpMaxGridTrades))
      {
       g_cycleFailed = true;
-      PrintFormat("[GridHedge] Cycle MARKED FAILED (Buys=%d, Sells=%d, Threshold=%d). Waiting for price to return to trigger.",
-                  g_buyCount, g_sellCount, InpMaxGridTrades);
+      PrintFormat("[GridHedge] CYCLE FAILED! (Buys=%d, Sells=%d, Max=%d). No more trades until price returns to trigger %.5f",
+                  g_buyCount, g_sellCount, InpMaxGridTrades, g_triggerPrice);
      }
   }
 
@@ -357,6 +408,7 @@ void ResetCycle(bool failed)
    g_lastSellPrice     = 0;
    g_cycleActive       = false;
    g_cycleFailed       = false;
+   g_initialDirection  = 0;
    g_initialTradeOpened= false;
   }
 
@@ -486,7 +538,7 @@ void RecoverState()
 bool IsSpreadOK()
   {
    if(InpMaxSpread <= 0) return true;
-   double spread = SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
+   long spread = SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
    return spread <= InpMaxSpread;
   }
 
