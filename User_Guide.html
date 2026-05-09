@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced MT5 Grid Hedging EA - User Guide</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px;
+            background: #fff;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 2px solid #2c3e50;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #2c3e50;
+            margin: 0;
+            font-size: 28px;
+        }
+        .header p {
+            color: #7f8c8d;
+            margin: 5px 0 0;
+        }
+        h2 {
+            color: #2980b9;
+            border-left: 5px solid #2980b9;
+            padding-left: 10px;
+            margin-top: 30px;
+        }
+        h3 {
+            color: #34495e;
+            margin-top: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f9fa;
+            color: #2c3e50;
+        }
+        .note {
+            background-color: #e7f3fe;
+            border-left: 6px solid #2196F3;
+            margin-bottom: 15px;
+            padding: 15px;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border-left: 6px solid #ffc107;
+            margin-bottom: 15px;
+            padding: 15px;
+        }
+        .step {
+            margin-bottom: 10px;
+        }
+        .footer {
+            margin-top: 50px;
+            text-align: center;
+            font-size: 12px;
+            color: #bdc3c7;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+        @media print {
+            body { padding: 0; }
+            .no-print { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Advanced MT5 Grid Hedging EA</h1>
+        <p>User Guide & Implementation Manual</p>
+    </div>
+
+    <div class="note">
+        <strong>Note:</strong> This Expert Advisor is designed specifically for <strong>MT5 Hedging Accounts</strong>. Ensure your trading account supports hedging before use.
+    </div>
+
+    <h2>1. Strategy Overview</h2>
+    <p>The Advanced MT5 Grid Hedging EA uses a sophisticated algorithm that combines dynamic grid expansion with bi-directional hedging. Key features include:</p>
+    <ul>
+        <li><strong>Dynamic Grid:</strong> Adds positions at specified intervals (pips/points).</li>
+        <li><strong>Hedging logic:</strong> Automatically opens opposite trades if the market reverses.</li>
+        <li><strong>Progressive Lot Scaling:</strong> Increases lot size incrementally only after a failed cycle to recover losses.</li>
+        <li><strong>Candlestick Filtering:</strong> (Optional) Only enters initial trades on high-probability price action patterns.</li>
+    </ul>
+
+    <h2>2. Installation Guide</h2>
+    <div class="step"><strong>Step 1:</strong> Locate your MT5 Data Folder (File > Open Data Folder).</div>
+    <div class="step"><strong>Step 2:</strong> Copy <code>GridHedge_EA.mq5</code> and <code>CandlePatterns.mqh</code> into <code>MQL5/Experts/</code>.</div>
+    <div class="step"><strong>Step 3:</strong> Refresh the Navigator in MT5 or restart MT5.</div>
+    <div class="step"><strong>Step 4:</strong> Open a chart of your preferred instrument (Forex, Gold, Crypto, etc.).</div>
+    <div class="step"><strong>Step 5:</strong> Drag the EA onto the chart and ensure "Allow Algo Trading" is enabled in both the EA settings and the MT5 top bar.</div>
+
+    <h2>3. Key Input Parameters</h2>
+    <table>
+        <tr>
+            <th>Parameter</th>
+            <th>Description</th>
+        </tr>
+        <tr>
+            <td>Starting Lot Size</td>
+            <td>Initial volume for the first trade of a cycle.</td>
+        </tr>
+        <tr>
+            <td>Grid Offset (Pips)</td>
+            <td>Distance between grid levels/trades.</td>
+        </tr>
+        <tr>
+            <td>Max Grid Trades</td>
+            <td>Max number of positions allowed per side (Buy/Sell).</td>
+        </tr>
+        <tr>
+            <td>Take Profit ($)</td>
+            <td>Total floating profit in account currency to close all trades.</td>
+        </tr>
+        <tr>
+            <td>Max Loss ($)</td>
+            <td>Safety stop for the entire cycle in account currency.</td>
+        </tr>
+        <tr>
+            <td>Lot Increment</td>
+            <td>Additional lot size added after a failed cycle.</td>
+        </tr>
+    </table>
+
+    <h2>4. Strategy Logic (Example)</h2>
+    <p>If you start a BUY cycle at 2000.00 with 100 points grid:</p>
+    <ol>
+        <li>Market goes to 2001.00: Second BUY opens.</li>
+        <li>Market reverses to 1999.00: First SELL (Hedge) opens.</li>
+        <li>If total profit from all buys and sells reaches your target (e.g., $10): <strong>All positions close immediately.</strong></li>
+    </ol>
+
+    <h2>5. Risk Disclaimer</h2>
+    <div class="warning">
+        <strong>Warning:</strong> Trading involves significant risk. Grid and Martingale-based strategies can lead to large drawdowns. Always test on a Demo account before using live funds. The developer is not responsible for any financial losses.
+    </div>
+
+    <div class="footer">
+        Advanced MT5 Grid Hedging EA - Documentation v1.0
+    </div>
+</body>
+</html>

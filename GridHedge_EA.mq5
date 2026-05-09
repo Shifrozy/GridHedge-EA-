@@ -26,7 +26,7 @@ enum ENUM_INIT_DIR { DIR_BUY=0, DIR_SELL=1, DIR_AUTO=2 };
 input group "=== Core Trading Settings ==="
 input double   InpStartLot        = 0.01;     // Starting Lot Size
 input int      InpGridPips        = 100;       // Grid Offset (points)
-input int      InpMaxGridTrades   = 5;         // Max Grid Trades Per Side
+input int      InpMaxGridTrades   = 5;         // Trades before cycle marked failed
 input double   InpTakeProfit      = 10.0;      // Take Profit (account currency, 0=disabled)
 input double   InpMaxLoss         = 50.0;      // Max Loss (account currency, 0=disabled)
 input int      InpMagicNumber     = 777777;    // Magic Number
@@ -80,6 +80,7 @@ int            g_sellCount;           // Sells opened in current cycle
 double         g_lastBuyPrice;        // Last buy entry price
 double         g_lastSellPrice;       // Last sell entry price
 bool           g_cycleActive;         // Is a trading cycle active?
+bool           g_cycleFailed;         // Has this cycle been marked as failed?
 int            g_failedCycles;        // Count of consecutive failed cycles
 bool           g_initialTradeOpened;  // First trade of cycle placed?
 datetime       g_lastBarTime;         // For new bar detection
@@ -118,6 +119,7 @@ int OnInit()
    g_lastBuyPrice      = 0;
    g_lastSellPrice     = 0;
    g_cycleActive       = false;
+   g_cycleFailed       = false;
    g_failedCycles      = 0;
    g_initialTradeOpened= false;
    g_lastBarTime       = 0;
@@ -157,6 +159,7 @@ void OnTick()
       PrintFormat("[GridHedge] TP reached! Profit=%.2f >= %.2f", totalProfit, InpTakeProfit);
       CloseAllPositions();
       ResetCycle(false); // successful cycle
+      if(InpShowPanel) UpdatePanel();
       return;
      }
 
@@ -165,7 +168,28 @@ void OnTick()
       PrintFormat("[GridHedge] SL reached! Loss=%.2f >= %.2f", MathAbs(totalProfit), InpMaxLoss);
       CloseAllPositions();
       ResetCycle(true); // failed cycle
+      if(InpShowPanel) UpdatePanel();
       return;
+     }
+
+   //--- Check if failed cycle and price returned to trigger area
+   if(g_cycleActive && g_cycleFailed && g_triggerPrice > 0)
+     {
+      double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
+      double gridDist = InpGridPips * g_point;
+      double mid = (ask + bid) / 2.0;
+
+      // Price returned within 1 grid distance of trigger
+      if(MathAbs(mid - g_triggerPrice) <= gridDist)
+        {
+         PrintFormat("[GridHedge] Price returned to trigger area (%.5f ~ %.5f). Closing failed cycle.",
+                     mid, g_triggerPrice);
+         CloseAllPositions();
+         ResetCycle(true); // failed → increase lot
+         if(InpShowPanel) UpdatePanel();
+         return;
+        }
      }
 
    //--- Check spread filter
@@ -180,7 +204,7 @@ void OnTick()
       return;
      }
 
-   //--- Cycle is active: manage grid
+   //--- Cycle is active: manage grid (unlimited trades)
    ManageGrid();
 
    //--- Update panel
@@ -261,62 +285,50 @@ void TryStartCycle()
   }
 
 //+------------------------------------------------------------------+
-//| Grid Management - add positions at grid intervals                |
+//| Grid Management - add positions at grid intervals (NO LIMIT)     |
 //+------------------------------------------------------------------+
 void ManageGrid()
   {
-   if(IsRestrictedTime()) return; // Don't add new trades during restricted hours
-
-   // Check if both sides maxed out - nothing more to do
-   if(g_buyCount >= InpMaxGridTrades && g_sellCount >= InpMaxGridTrades)
-      return;
+   if(IsRestrictedTime()) return;
 
    double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
    double gridDist = InpGridPips * g_point;
 
-   // --- Add BUY trades (same direction or hedge)
-   if(g_buyCount < InpMaxGridTrades)
+   // --- Add BUY trades (unlimited - no cap)
+   double buyRef = (g_lastBuyPrice > 0) ? g_lastBuyPrice : g_triggerPrice;
+   if(buyRef > 0 && ask >= buyRef + gridDist)
      {
-      double buyRef;
-      if(g_lastBuyPrice > 0)
-         buyRef = g_lastBuyPrice;
-      else
-         buyRef = g_triggerPrice; // First hedge buy: use trigger as reference
-
-      if(buyRef > 0 && ask >= buyRef + gridDist)
+      string label = (g_sellCount > 0 && g_buyCount == 0) ? "hedge" : "grid";
+      if(trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
+                    StringFormat("GridHedge Buy (%s) #%d", label, g_buyCount+1)))
         {
-         string label = (g_sellCount > 0 && g_buyCount == 0) ? "hedge" : "grid";
-         if(trade.Buy(g_currentLot, g_symbol, ask, 0, 0,
-                       StringFormat("GridHedge Buy (%s) #%d", label, g_buyCount+1)))
-           {
-            g_lastBuyPrice = ask;
-            g_buyCount++;
-            PrintFormat("[GridHedge] BUY (%s) #%d @ %.5f", label, g_buyCount, ask);
-           }
+         g_lastBuyPrice = ask;
+         g_buyCount++;
+         PrintFormat("[GridHedge] BUY (%s) #%d @ %.5f | Lot=%.2f", label, g_buyCount, ask, g_currentLot);
         }
      }
 
-   // --- Add SELL trades (same direction or hedge)
-   if(g_sellCount < InpMaxGridTrades)
+   // --- Add SELL trades (unlimited - no cap)
+   double sellRef = (g_lastSellPrice > 0) ? g_lastSellPrice : g_triggerPrice;
+   if(sellRef > 0 && bid <= sellRef - gridDist)
      {
-      double sellRef;
-      if(g_lastSellPrice > 0)
-         sellRef = g_lastSellPrice;
-      else
-         sellRef = g_triggerPrice; // First hedge sell: use trigger as reference
-
-      if(sellRef > 0 && bid <= sellRef - gridDist)
+      string label = (g_buyCount > 0 && g_sellCount == 0) ? "hedge" : "grid";
+      if(trade.Sell(g_currentLot, g_symbol, bid, 0, 0,
+                     StringFormat("GridHedge Sell (%s) #%d", label, g_sellCount+1)))
         {
-         string label = (g_buyCount > 0 && g_sellCount == 0) ? "hedge" : "grid";
-         if(trade.Sell(g_currentLot, g_symbol, bid, 0, 0,
-                        StringFormat("GridHedge Sell (%s) #%d", label, g_sellCount+1)))
-           {
-            g_lastSellPrice = bid;
-            g_sellCount++;
-            PrintFormat("[GridHedge] SELL (%s) #%d @ %.5f", label, g_sellCount, bid);
-           }
+         g_lastSellPrice = bid;
+         g_sellCount++;
+         PrintFormat("[GridHedge] SELL (%s) #%d @ %.5f | Lot=%.2f", label, g_sellCount, bid, g_currentLot);
         }
+     }
+
+   // --- Mark cycle as failed if either side exceeds threshold
+   if(!g_cycleFailed && (g_buyCount >= InpMaxGridTrades || g_sellCount >= InpMaxGridTrades))
+     {
+      g_cycleFailed = true;
+      PrintFormat("[GridHedge] Cycle MARKED FAILED (Buys=%d, Sells=%d, Threshold=%d). Waiting for price to return to trigger.",
+                  g_buyCount, g_sellCount, InpMaxGridTrades);
      }
   }
 
@@ -344,6 +356,7 @@ void ResetCycle(bool failed)
    g_lastBuyPrice      = 0;
    g_lastSellPrice     = 0;
    g_cycleActive       = false;
+   g_cycleFailed       = false;
    g_initialTradeOpened= false;
   }
 
@@ -559,12 +572,15 @@ void UpdatePanel()
    long   spread = SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
 
    SetLabelText(prefix+"lot",   StringFormat("Lot: %.2f (base: %.2f)", g_currentLot, InpStartLot));
-   SetLabelText(prefix+"cycle", StringFormat("Cycle: %s | Total: %d", g_cycleActive?"ACTIVE":"WAITING", g_totalCyclesRun));
-   SetLabelText(prefix+"buys",  StringFormat("Buys: %d / %d", g_buyCount, InpMaxGridTrades));
-   SetLabelText(prefix+"sells", StringFormat("Sells: %d / %d", g_sellCount, InpMaxGridTrades));
+   string cycleStr = "WAITING";
+   if(g_cycleActive && g_cycleFailed) cycleStr = "FAILED ⚠";
+   else if(g_cycleActive) cycleStr = "ACTIVE";
+   SetLabelText(prefix+"cycle", StringFormat("Cycle: %s | Total: %d", cycleStr, g_totalCyclesRun));
+   SetLabelText(prefix+"buys",  StringFormat("Buys: %d (fail@%d)", g_buyCount, InpMaxGridTrades));
+   SetLabelText(prefix+"sells", StringFormat("Sells: %d (fail@%d)", g_sellCount, InpMaxGridTrades));
    SetLabelText(prefix+"pnl",   StringFormat("P/L: %.2f", profit));
    ObjectSetInteger(0, prefix+"pnl", OBJPROP_COLOR, pColor);
-   SetLabelText(prefix+"fail",  StringFormat("Failed Cycles: %d", g_failedCycles));
+   SetLabelText(prefix+"fail",  StringFormat("Failed Cycles: %d | Next Lot: %.2f", g_failedCycles, NormalizeLot(InpStartLot + (g_failedCycles+1) * InpLotIncrement)));
    SetLabelText(prefix+"sprd",  StringFormat("Spread: %d pts", (int)spread));
    SetLabelText(prefix+"time",  StringFormat("Time OK: %s", IsRestrictedTime()?"NO ⛔":"YES ✅"));
   }
