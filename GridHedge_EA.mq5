@@ -174,6 +174,24 @@ void OnTick()
       return;
      }
 
+   //--- Detect manual close: if cycle is active but no positions exist, reset
+   if(g_cycleActive && TotalPositions() == 0)
+     {
+      PrintFormat("[GridHedge] All positions closed (manually or externally). Resetting cycle.");
+      g_triggerPrice      = 0;
+      g_buyCount          = 0;
+      g_sellCount         = 0;
+      g_lastBuyPrice      = 0;
+      g_lastSellPrice     = 0;
+      g_cycleActive       = false;
+      g_cycleFailed       = false;
+      g_initialDirection  = 0;
+      g_initialTradeOpened= false;
+      // Keep g_currentLot and g_failedCycles unchanged (don't penalize manual close)
+      if(InpShowPanel) UpdatePanel();
+      return;
+     }
+
    //--- Check if failed cycle and price returned to trigger area
    if(g_cycleActive && g_cycleFailed && g_triggerPrice > 0)
      {
