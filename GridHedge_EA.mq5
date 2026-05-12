@@ -86,6 +86,8 @@ int            g_failedCycles;        // Count of consecutive failed cycles
 bool           g_initialTradeOpened;  // First trade of cycle placed?
 datetime       g_lastBarTime;         // For new bar detection
 int            g_totalCyclesRun;      // Lifetime cycles
+bool           g_waitingForReturn;    // Waiting for price to return to trigger after MaxLoss
+double         g_returnPrice;         // Price area to wait for before restarting
 
 //====================================================================
 //  INITIALIZATION
@@ -126,6 +128,8 @@ int OnInit()
    g_initialTradeOpened= false;
    g_lastBarTime       = 0;
    g_totalCyclesRun    = 0;
+   g_waitingForReturn  = false;
+   g_returnPrice       = 0;
 
    // Recover state from existing positions
    RecoverState();
@@ -168,8 +172,14 @@ void OnTick()
    if(InpMaxLoss > 0 && totalProfit <= -InpMaxLoss)
      {
       PrintFormat("[GridHedge] SL reached! Loss=%.2f >= %.2f", MathAbs(totalProfit), InpMaxLoss);
+      double savedTrigger = g_triggerPrice; // Save BEFORE reset clears it
       CloseAllPositions();
-      ResetCycle(true); // failed cycle
+      ResetCycle(true); // failed cycle — increases lot
+      // Don't start new cycle immediately — wait for price to return
+      g_waitingForReturn = true;
+      g_returnPrice = savedTrigger;
+      PrintFormat("[GridHedge] Waiting for price to return to %.5f before restarting with lot=%.2f",
+                  g_returnPrice, g_currentLot);
       if(InpShowPanel) UpdatePanel();
       return;
      }
@@ -187,6 +197,8 @@ void OnTick()
       g_cycleFailed       = false;
       g_initialDirection  = 0;
       g_initialTradeOpened= false;
+      g_waitingForReturn  = false;  // Clear waiting on manual close
+      g_returnPrice       = 0;
       // Keep g_currentLot and g_failedCycles unchanged (don't penalize manual close)
       if(InpShowPanel) UpdatePanel();
       return;
@@ -256,6 +268,26 @@ void OnTick()
    if(!g_cycleActive)
      {
       if(IsRestrictedTime()) return;
+
+      // After MaxLoss: wait for price to return to trigger area
+      if(g_waitingForReturn && g_returnPrice > 0)
+        {
+         double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+         double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
+         double gridDist = InpGridPips * g_point;
+         double mid = (ask + bid) / 2.0;
+         if(MathAbs(mid - g_returnPrice) > gridDist)
+           {
+            if(InpShowPanel) UpdatePanel();
+            return; // Price hasn't returned yet — keep waiting
+           }
+         // Price returned! Clear waiting and let TryStartCycle proceed
+         PrintFormat("[GridHedge] Price returned to %.5f area. Ready to start new cycle with lot=%.2f",
+                     g_returnPrice, g_currentLot);
+         g_waitingForReturn = false;
+         g_returnPrice = 0;
+        }
+
       TryStartCycle();
       if(InpShowPanel) UpdatePanel();
       return;
