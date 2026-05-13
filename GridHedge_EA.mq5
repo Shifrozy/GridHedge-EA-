@@ -164,7 +164,14 @@ void OnTick()
      {
       PrintFormat("[GridHedge] TP reached! Profit=%.2f >= %.2f", totalProfit, InpTakeProfit);
       CloseAllPositions();
-      ResetCycle(false); // successful cycle
+      // Only reset if ALL positions are confirmed closed
+      if(TotalPositions() == 0)
+        {
+         ResetCycle(false);
+         PrintFormat("[GridHedge] All trades closed. Cycle reset (success).");
+        }
+      else
+         PrintFormat("[GridHedge] Some positions failed to close. Will retry next tick.");
       if(InpShowPanel) UpdatePanel();
       return;
      }
@@ -172,14 +179,19 @@ void OnTick()
    if(InpMaxLoss > 0 && totalProfit <= -InpMaxLoss)
      {
       PrintFormat("[GridHedge] SL reached! Loss=%.2f >= %.2f", MathAbs(totalProfit), InpMaxLoss);
-      double savedTrigger = g_triggerPrice; // Save BEFORE reset clears it
+      double savedTrigger = g_triggerPrice;
       CloseAllPositions();
-      ResetCycle(true); // failed cycle — increases lot
-      // Don't start new cycle immediately — wait for price to return
-      g_waitingForReturn = true;
-      g_returnPrice = savedTrigger;
-      PrintFormat("[GridHedge] Waiting for price to return to %.5f before restarting with lot=%.2f",
-                  g_returnPrice, g_currentLot);
+      // Only reset if ALL positions are confirmed closed
+      if(TotalPositions() == 0)
+        {
+         ResetCycle(true);
+         g_waitingForReturn = true;
+         g_returnPrice = savedTrigger;
+         PrintFormat("[GridHedge] All trades closed. Waiting for price to return to %.5f with lot=%.2f",
+                     g_returnPrice, g_currentLot);
+        }
+      else
+         PrintFormat("[GridHedge] Some positions failed to close. Will retry next tick.");
       if(InpShowPanel) UpdatePanel();
       return;
      }
@@ -467,22 +479,45 @@ void ResetCycle(bool failed)
 //====================================================================
 
 //+------------------------------------------------------------------+
-//| Close all positions for this EA                                  |
+//| Close all positions for this EA (with retry)                     |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
   {
-   for(int i = PositionsTotal()-1; i >= 0; i--)
+   int maxRetries = 3;
+   for(int attempt = 0; attempt < maxRetries; attempt++)
      {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      if(PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      bool allClosed = true;
+      for(int i = PositionsTotal()-1; i >= 0; i--)
+        {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
 
-      if(!trade.PositionClose(ticket, InpSlippage))
-         PrintFormat("[GridHedge] Failed close ticket %d: %s", ticket, trade.ResultRetcodeDescription());
-      else
-         PrintFormat("[GridHedge] Closed ticket %d", ticket);
+         if(!trade.PositionClose(ticket, InpSlippage))
+           {
+            PrintFormat("[GridHedge] Failed close ticket %d (attempt %d): %s",
+                        ticket, attempt+1, trade.ResultRetcodeDescription());
+            allClosed = false;
+           }
+         else
+            PrintFormat("[GridHedge] Closed ticket %d", ticket);
+        }
+
+      if(allClosed || TotalPositions() == 0)
+        {
+         PrintFormat("[GridHedge] All positions closed successfully.");
+         return;
+        }
+
+      // Wait before retry
+      if(attempt < maxRetries - 1)
+        {
+         PrintFormat("[GridHedge] Retrying close in 500ms... (attempt %d/%d)", attempt+1, maxRetries);
+         Sleep(500);
+        }
      }
+   PrintFormat("[GridHedge] WARNING: Some positions could not be closed after %d attempts!", maxRetries);
   }
 
 //+------------------------------------------------------------------+
