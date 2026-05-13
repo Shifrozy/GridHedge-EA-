@@ -178,17 +178,16 @@ void OnTick()
 
    if(InpMaxLoss > 0 && totalProfit <= -InpMaxLoss)
      {
-      PrintFormat("[GridHedge] SL reached! Loss=%.2f >= %.2f", MathAbs(totalProfit), InpMaxLoss);
-      double savedTrigger = g_triggerPrice;
+      PrintFormat("[GridHedge] MAX LOSS hit! Loss=%.2f >= %.2f. Closing all and resetting to base lot.",
+                  MathAbs(totalProfit), InpMaxLoss);
       CloseAllPositions();
       // Only reset if ALL positions are confirmed closed
       if(TotalPositions() == 0)
         {
-         ResetCycle(true);
-         g_waitingForReturn = true;
-         g_returnPrice = savedTrigger;
-         PrintFormat("[GridHedge] All trades closed. Waiting for price to return to %.5f with lot=%.2f",
-                     g_returnPrice, g_currentLot);
+         // MaxLoss = safety stop = FULL RESET to base lot (0.01)
+         // NOT a progressive lot increase — that only happens on grid max-out
+         ResetCycle(false);
+         PrintFormat("[GridHedge] All trades closed. Fresh restart with base lot=%.2f", g_currentLot);
         }
       else
          PrintFormat("[GridHedge] Some positions failed to close. Will retry next tick.");
