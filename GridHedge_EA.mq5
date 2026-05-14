@@ -168,8 +168,8 @@ void OnTick()
       CloseAllPositions();
       if(TotalPositions() == 0)
         {
-         ResetCycle(false);
-         PrintFormat("[GridHedge] SUCCESS! Lot reset to %.2f", g_currentLot);
+         ResetCycle(false); // Reset lot to base
+         PrintFormat("[GridHedge] SUCCESS! Fresh start with lot=%.2f", g_currentLot);
         }
       if(InpShowPanel) UpdatePanel();
       return;
@@ -178,27 +178,33 @@ void OnTick()
    //--- 2) MaxLoss Hit → close all → reset to base lot → fresh start
    if(openPositions > 0 && InpMaxLoss > 0 && totalProfit <= -InpMaxLoss)
      {
-      PrintFormat("[GridHedge] MAX LOSS! Loss=%.2f >= %.2f", MathAbs(totalProfit), InpMaxLoss);
+      PrintFormat("[GridHedge] MAX LOSS hit! Loss=%.2f >= %.2f", MathAbs(totalProfit), InpMaxLoss);
       CloseAllPositions();
       if(TotalPositions() == 0)
         {
-         ResetCycle(false);
-         PrintFormat("[GridHedge] Full reset. Lot=%.2f", g_currentLot);
+         ResetCycle(false); // Reset lot to base (safety stop)
+         PrintFormat("[GridHedge] Full reset. Fresh start with base lot=%.2f", g_currentLot);
         }
       if(InpShowPanel) UpdatePanel();
       return;
      }
 
-   //--- 3) Grid maxed → close all → increase lot → start fresh immediately
+   //--- 3) Grid maxed out → close all → increase lot → wait for price return
    if(g_cycleActive && g_cycleFailed)
      {
-      PrintFormat("[GridHedge] Grid maxed - closing all for lot escalation.");
+      PrintFormat("[GridHedge] Grid maxed - closing all trades for lot escalation.");
+      double savedTrigger = g_triggerPrice;
+      int savedDir = g_initialDirection;
       CloseAllPositions();
       if(TotalPositions() == 0)
         {
+         // Increase lot for next cycle
          g_failedCycles++;
          g_currentLot = NormalizeLot(InpStartLot + g_failedCycles * InpLotIncrement);
-         // Full reset — new cycle starts immediately next tick
+         // Save return info before reset
+         g_waitingForReturn = true;
+         g_returnPrice = savedTrigger;
+         // Reset cycle state
          g_triggerPrice      = 0;
          g_buyCount          = 0;
          g_sellCount         = 0;
@@ -206,20 +212,22 @@ void OnTick()
          g_lastSellPrice     = 0;
          g_cycleActive       = false;
          g_cycleFailed       = false;
-         g_initialDirection  = 0;
+         g_initialDirection  = savedDir; // Keep direction for next cycle
          g_initialTradeOpened= false;
-         PrintFormat("[GridHedge] Failed cycle #%d. New lot=%.2f. Restarting immediately.",
-                     g_failedCycles, g_currentLot);
+         PrintFormat("[GridHedge] Cycle failed #%d. Lot=%.2f. Waiting for price to return to %.5f",
+                     g_failedCycles, g_currentLot, g_returnPrice);
         }
       if(InpShowPanel) UpdatePanel();
       return;
      }
 
    //--- 4) Detect manual close: cycle active but all positions gone
-   if(g_cycleActive && openPositions == 0)
+   if(g_cycleActive && TotalPositions() == 0)
      {
-      PrintFormat("[GridHedge] Positions closed externally. Resetting.");
+      PrintFormat("[GridHedge] All positions closed externally. Full reset.");
       ResetCycle(false);
+      g_waitingForReturn = false;
+      g_returnPrice = 0;
       if(InpShowPanel) UpdatePanel();
       return;
      }
@@ -227,16 +235,36 @@ void OnTick()
    //--- 5) Check spread filter
    if(!IsSpreadOK()) return;
 
-   //--- 6) No cycle active → start one immediately
+   //--- 6) If no cycle active, try to start one
    if(!g_cycleActive)
      {
       if(IsRestrictedTime()) return;
+
+      // If waiting for price to return to trigger area after failed cycle
+      if(g_waitingForReturn && g_returnPrice > 0)
+        {
+         double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+         double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
+         double gridDist = InpGridPips * g_point;
+         double mid = (ask + bid) / 2.0;
+         if(MathAbs(mid - g_returnPrice) > gridDist)
+           {
+            if(InpShowPanel) UpdatePanel();
+            return; // Price hasn't returned yet
+           }
+         // Price returned!
+         PrintFormat("[GridHedge] Price returned to %.5f. Starting new cycle with lot=%.2f",
+                     g_returnPrice, g_currentLot);
+         g_waitingForReturn = false;
+         g_returnPrice = 0;
+        }
+
       TryStartCycle();
       if(InpShowPanel) UpdatePanel();
       return;
      }
 
-   //--- 7) Cycle active → manage grid
+   //--- 7) Cycle is active: manage grid
    ManageGrid();
 
    //--- Update panel
